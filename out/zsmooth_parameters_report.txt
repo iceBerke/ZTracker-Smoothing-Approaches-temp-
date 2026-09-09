@@ -1,0 +1,1501 @@
+ZTracker Tool 3 (TopoJ) Z-trajectory outlier rejection and smoothing
+zsmooth.py parameters report
+==============================================================================
+DERIVATION STAMP : 7bb10d0dfaa2   (zsmooth-derivation-4)
+  A short hash over the derivation version, every declared constant, and the
+  CLI arguments the derivation reads. Two runs sharing this stamp produced their numbers
+  the same way; an output carrying a different stamp came from a different derivation and
+  should not be compared with this one. It appears in every parameter block below.
+==============================================================================
+All analysis is performed in FRAME units. Z units are whatever the input files carry (micrometres, per the export specification).
+
+Command line:
+  zsmooth.py data/four_neighbor_mean_results_table.csv data/four_neighbor_median_results_table.csv data/radius_mean_results_table.csv data/radius_median_results_table.csv data/single_pixel_results_table.csv --out out --z-step 2.0 --frame-interval 0.5 --lattice-reference single_pixel_results_table.csv --plot
+
+Inputs:
+  C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\four_neighbor_mean_results_table.csv
+  C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\four_neighbor_median_results_table.csv
+  C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\radius_mean_results_table.csv
+  C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\radius_median_results_table.csv
+  C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\single_pixel_results_table.csv
+Output directory: C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\out
+
+User-supplied parameters:
+  --z-step         = 2 micrometres
+  --lattice-reference = single_pixel_results_table.csv
+  --frame-interval = 0.5 s (report-only)
+  --mad-threshold  = 4 MAD
+  --noise-margin   = 2 (default 2, not overridden)
+  --plot           = on
+  --hampel-window  = derived from data
+  --smooth-window  = derived from data
+
+Declared constants (all of them scale-free ratios or tolerances):
+  Stage 2 Hampel threshold                     = 5 MAD
+  Stage 2 window / median track length         = 0.25
+  Stage 3d noise-margin factor k (in use)      = 2 (default 2)
+  --z-step equality rel. tolerance             = 1e-06
+  --z-step submultiple rel. tolerance (info)   = 1e-06
+  Sensitivity bridge points beyond the range   = 8 (log-spaced)
+  Per-track outlier naming rate                = 0.1
+  MSD fit relative-residual tolerance          = 0.1
+  MSD minimum lag pair fraction                = 0.1
+  Confinement 'ceases to rise' tolerance       = 0.05
+  Confinement min sustained tail / lag range   = 0.25 (never fewer than 3 lags)
+  Outlier-rate warning threshold               = 0.05
+  sigma/Z-range warning threshold              = 0.1
+  Minimum tracks for a stable MSD fit          = 5
+  Minimum pairs at the top fit lag             = 100
+
+==============================================================================
+STAGE 1 -- DIAGNOSE
+==============================================================================
+
+1a. Cross-file consistency of Track_ID, Frame, X, Y
+------------------------------------------------------------------------------
+Reference file: four_neighbor_mean_results_table.csv (5465 rows)
+  four_neighbor_median_results_table.csv: identical Track_ID / Frame / X / Y  [OK]
+  radius_mean_results_table.csv: identical Track_ID / Frame / X / Y  [OK]
+  radius_median_results_table.csv: identical Track_ID / Frame / X / Y  [OK]
+  single_pixel_results_table.csv: identical Track_ID / Frame / X / Y  [OK]
+
+1b. Z-step cross-check
+------------------------------------------------------------------------------
+Supplied --z-step : 2
+Detected spacing is the smallest value g such that >= 99% of distinct Z values are multiples of g
+and the lattice slots are at least 5% occupied.
+
+Per-file granularity. This is INFORMATION, not a check: granularity is diagnostic of
+the sampling method, not a fault. No warning is raised from this table.
+
+  file                                             detected spacing   relationship to --z-step
+  four_neighbor_mean_results_table.csv                          0.5   = supplied step / 4
+  four_neighbor_median_results_table.csv                          1   = supplied step / 2
+  radius_mean_results_table.csv          none (continuously valued)   no lattice: consistent with a mean over many samples
+  radius_median_results_table.csv                                 1   = supplied step / 2
+  single_pixel_results_table.csv                                  2   = supplied step (raw lattice granularity)
+
+Lattice reference : single_pixel_results_table.csv (named by --lattice-reference as single-pixel sampling)
+                    resolved to input #5: C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\single_pixel_results_table.csv
+  Z step VERIFIED: the reference lattice spacing is 2, equal to the supplied 2
+  within a relative tolerance of 1e-06.
+
+1c. Pairwise cross-method comparison and consensus check
+------------------------------------------------------------------------------
+Thresholds (multiples of the supplied --z-step 2): 1x = 2, 5x = 10, 25x = 50
+
+  method A                   method B                   compared       >1x       >5x      >25x  median|dZ|
+  four_neighbor_mean_results four_neighbor_median_resul     5465       282        27        14           0
+  four_neighbor_mean_results radius_mean_results_table.     5465      4630      2721       847       9.907
+  four_neighbor_mean_results radius_median_results_tabl     5465      2977       435        94         2.5
+  four_neighbor_mean_results single_pixel_results_table     5465      1063       115        22           1
+  four_neighbor_median_resul radius_mean_results_table.     5465      4664      2767       859       10.18
+  four_neighbor_median_resul radius_median_results_tabl     5465      2726       441        85           2
+  four_neighbor_median_resul single_pixel_results_table     5465       750       111        11           0
+  radius_mean_results_table. radius_median_results_tabl     5465      4418      2484       805       8.023
+  radius_mean_results_table. single_pixel_results_table     5465      4701      2822       864        10.6
+  radius_median_results_tabl single_pixel_results_table     5465      2601       489        89           2
+
+Consensus score = fraction of rows where |Z_method - median(Z of the OTHER methods)| > 5x z-step = 10.
+A method is flagged by a Hampel test across those scores at 4 MAD (MAD floored at 1 row = 0.000183).
+
+  method                          median|Z-consensus|  points over     score
+  four_neighbor_mean_results_tab                    1          135    0.0247
+  four_neighbor_median_results_t                    1          164    0.0300
+  radius_mean_results_table.csv                 9.972         2730    0.4995
+  radius_median_results_table.cs                  2.5          427    0.0781
+  single_pixel_results_table.csv                1.299          246    0.0450
+
+  score median = 0.0450; score MAD = 0.0301 (floored to 0.0301); flag if |score - median| > 4 x MAD = 0.1205
+[WARNING: METHOD_DISAGREES_WITH_CONSENSUS] radius_mean_results_table.csv disagrees with the consensus of the other methods: 2730 of 5465 points (49.95%) differ from the median of the other methods by more than 10 (median deviation 9.972). A sampling window that straddles a height discontinuity produces confidently wrong values; this is that check.
+
+1d. Per-file description
+------------------------------------------------------------------------------
+four_neighbor_mean_results_table.csv
+  rows                : 5465
+  tracks              : 70
+  NaN / blank Z       : 0 (0.000%)
+  Z range             : -262.5 .. 400 (span 662.5)
+  Z distinct values   : 1035
+  track length (pts)  : min 42  q25 49  median 68  q75 97  max 264  mean 78.1
+  track span (frames) : min 43  median 74  max 281
+  frame gaps          : 5395 intervals, 198 (3.67%) larger than 1 frame; max gap 10 frames
+  gap histogram (gap:count, first 8): 1:5197, 2:72, 3:26, 4:21, 5:18, 6:15, 7:13, 8:16
+
+four_neighbor_median_results_table.csv
+  rows                : 5465
+  tracks              : 70
+  NaN / blank Z       : 0 (0.000%)
+  Z range             : -262 .. 400 (span 662)
+  Z distinct values   : 569
+  track length (pts)  : min 42  q25 49  median 68  q75 97  max 264  mean 78.1
+  track span (frames) : min 43  median 74  max 281
+  frame gaps          : 5395 intervals, 198 (3.67%) larger than 1 frame; max gap 10 frames
+  gap histogram (gap:count, first 8): 1:5197, 2:72, 3:26, 4:21, 5:18, 6:15, 7:13, 8:16
+
+radius_mean_results_table.csv
+  rows                : 5465
+  tracks              : 70
+  NaN / blank Z       : 0 (0.000%)
+  Z range             : -295.932 .. 395.288 (span 691.22)
+  Z distinct values   : 5192
+  track length (pts)  : min 42  q25 49  median 68  q75 97  max 264  mean 78.1
+  track span (frames) : min 43  median 74  max 281
+  frame gaps          : 5395 intervals, 198 (3.67%) larger than 1 frame; max gap 10 frames
+  gap histogram (gap:count, first 8): 1:5197, 2:72, 3:26, 4:21, 5:18, 6:15, 7:13, 8:16
+
+radius_median_results_table.csv
+  rows                : 5465
+  tracks              : 70
+  NaN / blank Z       : 0 (0.000%)
+  Z range             : -384 .. 400 (span 784)
+  Z distinct values   : 314
+  track length (pts)  : min 42  q25 49  median 68  q75 97  max 264  mean 78.1
+  track span (frames) : min 43  median 74  max 281
+  frame gaps          : 5395 intervals, 198 (3.67%) larger than 1 frame; max gap 10 frames
+  gap histogram (gap:count, first 8): 1:5197, 2:72, 3:26, 4:21, 5:18, 6:15, 7:13, 8:16
+
+single_pixel_results_table.csv
+  rows                : 5465
+  tracks              : 70
+  NaN / blank Z       : 0 (0.000%)
+  Z range             : -382 .. 400 (span 782)
+  Z distinct values   : 308
+  track length (pts)  : min 42  q25 49  median 68  q75 97  max 264  mean 78.1
+  track span (frames) : min 43  median 74  max 281
+  frame gaps          : 5395 intervals, 198 (3.67%) larger than 1 frame; max gap 10 frames
+  gap histogram (gap:count, first 8): 1:5197, 2:72, 3:26, 4:21, 5:18, 6:15, 7:13, 8:16
+
+
+==============================================================================
+four_neighbor_mean_results_table.csv
+==============================================================================
+
+Stage 2 -- strict provisional pass (output NOT used as the result)
+------------------------------------------------------------------------------
+  window    : 17 frames (= 0.25 x measured median track length 68, rounded up to odd)
+  threshold : 5 MAD
+  MAD floor : 2 (the supplied --z-step)
+  provisionally removed: 114 of 5465 points (2.086%)
+  Purpose: keep gross outliers out of the Stage 3 fit. This output is discarded afterwards.
+
+  Model-free localisation noise (cross-check, NOT used in any derivation):
+    For independent localisation noise, two successive displacements share an endpoint, so
+    Cov(delta_i, delta_i+1) = -sigma^2. This assumes no MSD model, no power law and no fit range,
+    and it is computed before the fit so it survives a fit that fails.
+    successive-displacement pairs (frames f, f+1, f+2 all present) = 4737
+    Cov(delta_i, delta_i+1) = -19.4707
+    sigma_cov = sqrt(-Cov) = 4.4126 (Z units)
+
+Stage 3 -- measure the motion timescale
+------------------------------------------------------------------------------
+  MSD probed to lag 200; usable lag range 1..37
+    (a lag is usable while it keeps >= 10% of the lag-1 pair count [5032] and stays within half the median track span [37])
+  Model               : MSD(tau) = 2*sigma^2 + Gamma * tau^alpha (anomalous diffusion; alpha is fitted, not assumed)
+  Fit range chosen    : lags 1..8   (rel residual 0.0161)
+    Two criteria bound the range; the smaller wins.
+    1. Model adequacy: extend while the RMS fit residual stays within 10% of the mean MSD
+       over the range. That allows lags 1..37.
+    2. sigma identifiability: sigma is the ZERO-LAG intercept, so only short lags carry information
+       about it. Fitted over a long range, a flexible power law absorbs the short-lag structure into
+       its exponent and the intercept slides to zero and then negative. The cap is the end of the
+       plateau over which the fitted sigma is stable to within 10% across at least
+       3 consecutive ranges. That allows lags 1..8. No lag count is hardcoded.
+       plateau: L=6:4.499, L=7:4.327, L=8:4.311
+    Why stability rather than intercept positivity: positivity would take the LAST range before the
+    intercept goes negative, by which point it is already collapsing, and the sigma it returns is far
+    below the independent model-free estimate. The stability cap was chosen because it produces
+    AGREEMENT with the model-free covariance estimator, and that agreement between two estimators
+    sharing no assumptions is the justification for the rule. Compare the two sigma values below.
+    alpha was searched on a dense grid over [0.05, 2] step 0.005; at each alpha the model is linear in 2*sigma^2 and Gamma, so those are exact least squares.
+  MSD(tau) (Z units^2), pooled across tracks, present-pairs only:
+      lag            MSD     pairs
+        1        58.6756      5032  (in fit)
+        2        74.8057      4848  (in fit)
+        3        104.042      4732  (in fit)
+        4        133.386      4636  (in fit)
+        5        165.126      4553  (in fit)
+        6        190.921      4475  (in fit)
+        7        220.514      4412  (in fit)
+        8        253.373      4357  (in fit)
+        9        266.457      4300
+       10         276.73      4238
+       11        300.798      4177
+       12        305.273      4128
+       13        280.385      4064
+       14        293.891      3996
+       15         295.42      3946
+       16        313.115      3899
+       17        316.518      3844
+       18        314.298      3788
+       19         320.21      3727
+       20        315.018      3666
+       21        348.238      3603
+       22        354.827      3545
+       23        361.695      3485
+       24        372.554      3429
+       25        406.881      3375
+       26        446.344      3316
+       27        456.218      3269
+       28        466.246      3216
+       29        473.383      3158
+       30        484.506      3095
+       31        487.731      3027
+       32        499.239      2980
+       33        488.202      2923
+       34        478.734      2873
+       35        482.973      2813
+       36        483.946      2751
+       37        487.151      2697
+
+  Noise share of MSD(1): 2*sigma_cov^2 / MSD(1) = 2*19.4707 / 58.6756 = 66.37%
+    That percentage is the quantitative justification for smoothing at all: it is how much of
+    the frame-to-frame variation is measurement rather than movement.
+    Read the two terms differently. MSD(1) is a mean of SQUARES and is highly sensitive to the
+    Stage 2 settings -- on this data it moves by over 100% between reasonable Stage 2 choices,
+    because a handful of retained outliers dominate a mean of squares. sigma_cov over the same
+    range of settings moves by a few percent. The covariance estimator is comparatively robust;
+    the share, inheriting MSD(1)'s denominator, is not. Trust sigma_cov more than the percentage.
+  Measured quantities :
+    MSD intercept 2*sigma^2 = 37.171
+    localisation noise sigma = 4.31109 (Z units)
+    transport coefficient Gamma = 18.595 (Z units^2 per frame^alpha)
+    anomalous exponent alpha = 1.1800  [consistent with normal diffusion]
+      alpha = 1 is normal diffusion; below 1 subdiffusive; above 1 superdiffusive or directed.
+      alpha on unrejected data is NOT AVAILABLE: the anomalous model does not converge on the uncleaned MSD at any fit range.
+      It is deliberately not forced over the cleaned data's fit range: fitting it where it is not
+      conditioned would reintroduce the over-extended-range misspecification the stability cap
+      removes. The size of the Stage 2 artifact is therefore unknown for this method.
+    single-frame motion scale sqrt(Gamma) = 4.31219 (Z units)
+    noise/motion crossover lag tau* = (2*sigma^2/Gamma)^(1/alpha) = 1.7986 frames
+    confinement lag = NOT REACHED within lags 1..37
+  Derived windows     :
+    smoothing window: smallest odd W with noise(W)/motion(W) <= 1/2^2 at lag 1, where
+      noise(W) = 2*sigma^2*W^-2 and motion(W) = Gamma*W^(alpha-2), so ratio(W) = 2*sigma^2/(Gamma*W^alpha)
+      -> W >= (2*2^2*sigma^2/Gamma)^(1/alpha) = (7.9959)^(1/1.1800) = 5.8230  =>  W_smooth = 7
+      the 1/alpha correction: uncorrected requirement 7.9959 (W = 9) -> corrected 5.8230 (W = 7)
+      The uncorrected form is the alpha = 1 special case. It was what this tool used previously and
+      is systematically wrong away from alpha = 1, silently.
+    Hampel window   : smallest odd W >= 2*tau* + 1 = 4.5971  =>  W_hampel = 5
+
+  UNCERTAINTY ON alpha, AND ON THE WINDOW IT IMPLIES:
+    Method: bootstrap over TRACKS, 200 of 200 replicates converged, 95% percentile interval, seed 20240918.
+    Tracks are the independent units: the MSD is pooled across them, while within a track the
+    lags are strongly correlated, which rules out a residual-based interval and makes a profile
+    likelihood need a noise model this correlation makes intractable. The bootstrap needs none.
+    The fit range is HELD FIXED at 1..8, so this interval is conditional on that
+    range; the dependence on where the fit stops is the fit-range table's job, not this one.
+    alpha      = 1.1800  [0.7199, 1.4005]
+    W_smooth   = 7  [5, 19]   (requirement 5.8230 [3.1802, 18.2885])
+    relative interval width: alpha 0.577, window 2.595 (window is 4.50x alpha's)
+    of which the 1/alpha exponent alone contributes 2.326, an amplification of 4.03x on
+    alpha's own width; the remainder is sigma and Gamma varying too.
+[WARNING: WINDOW_NOT_DETERMINED] four_neighbor_mean_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.7199, 1.4005) maps to windows 5..19, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+
+  ALTERNATIVE WINDOW (report only -- NOT used, nothing below depends on it):
+    Transfer functions of the gap-aware moving average at lag 1, MEASURED ON THIS RUN by
+    laying synthetic series over this method's own frames and gaps (seed 20240917,
+    windows [3, 5, 7, 9, 11, 15, 21]):
+      noise  ~ W^-1.930   (structurally expected -2.00)
+      motion ~ W^-0.788   (structurally expected alpha-2 = -0.82; fBm at Hurst 0.590)
+    The noise does NOT divide by W. Successive windows overlap in W-1 of their W points, so
+    their difference is (1/W)*(eps[t+1+h] - eps[t-h]) and its variance falls as 1/W^2. The
+    motion falls as W^(alpha-2): the same difference spans W frames of displacement, which
+    accumulate as W^alpha.
+    Hence ratio = 2*sigma^2 / (Gamma * W^alpha), and requiring ratio <= f gives
+      W >= (2*sigma^2 / (f*Gamma))^(1/alpha).
+    The exponent 1/alpha is not optional. It vanishes at alpha = 1 and dominates away from it;
+    the formula currently IN USE omits it and is correct only at alpha = 1.
+    sigma_cov = 4.4126; noise 2*sigma_cov^2 = 38.9415; MSD(1) = 58.6756
+    measured motion Gamma_meas = MSD(1) - 2*sigma_cov^2 = 19.7341
+    f = 1/k^2 = 0.2500;  2*sigma^2/(f*Gamma) = 7.8932
+    raised to 1/alpha = 0.8475  ->  W >= 5.7595  =>  W_alt = 7
+    (without the 1/alpha correction it would be 9; the current rule in use gives 7)
+    This does NOT remove a free parameter. f is exactly 1/k^2 and plays the identical role;
+    the rule is renamed, not made parameter-free. What it does change is WHERE the inputs
+    come from: sigma and Gamma are both measured here, so the window stops depending on the
+    MSD model and the fit range. That is a robustness gain, not a reduction in free choices.
+
+  Fit-range sensitivity. The discarded linear model is shown ONLY for comparison;
+  nothing is derived from it. Ranges span the usable lag range at 0, 25, 50, 75 and 100%,
+  plus the range actually chosen.
+       range | lin 2sig^2     lin D  lin W |     2sig^2     Gamma   alpha      W  relres
+    1..5     |      25.76     27.15      5 |      46.36     11.22  1.4700      7  0.0140  (within cap)
+    1..6     |      25.01     27.47      5 |      40.48     15.99  1.2600      7  0.0208  (within cap)
+    1..7     |      24.09     27.82      5 |      37.44      18.4  1.1850      7  0.0190  (within cap)
+    1..8     |       22.4     28.38      5 |      37.17     18.59  1.1800      7  0.0161  <-- in use
+    1..13    |      49.85     21.78     11 |     -55.81     98.22  0.5200      1  0.0754
+    1..21    |      101.5     13.05     33 |     -615.6     646.6  0.1300      1  0.0743
+    1..29    |      105.4     12.48     35 |      -52.8     106.2  0.4550      1  0.0853
+    1..37    |      119.2     11.33     43 |     -37.32      92.7  0.4900      1  0.0725
+
+    NOTE: 4 of 8 fit ranges give a window of 1, i.e. no smoothing at all.
+    The max/min ratio below is dominated by that and should be read as 'the model does not agree with
+    itself about whether to smooth', not as a smooth spread of window sizes.
+    LIVE spread -- across the ranges INSIDE the cap (1..5 through 1..8), which are
+    the ranges the tool could actually have chosen. This is the dependence that remains:
+      linear model (discarded): 1.00x
+      anomalous model (in use): 1.00x
+    COUNTERFACTUAL spread -- across ALL ranges up to 1..37, i.e. what would happen if the
+    stability cap were NOT applied. This is NOT live instability; the cap removes it:
+      linear model (discarded): 8.60x
+      anomalous model (in use): 7.00x
+    The anomalous model LARGELY REMOVES the fit-range sensitivity: the window varies by 1.00x across fit ranges, below the 2x threshold for calling it stable.
+[WARNING: CONFINEMENT_UNBOUNDED] four_neighbor_mean_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+
+  IN USE: Hampel window = 5 frames, smoothing window = 7 frames
+
+  HOW THIS SMOOTHING WINDOW WAS SET -- read before using it.
+  It is NOT a measured quantity. It depends on THREE arbitrary choices:
+    1. k, the noise margin (--noise-margin, in use 2). The window scales as k^(2/alpha) = k^1.695:
+       at k = 1 it would be about 3, at k = 4 about 19, against 7 here.
+       (k^2 exactly only at alpha = 1.) k can therefore be moved to reach almost any window,
+       and any downstream speed.
+    2. The MSD fit range. See the fit-range sensitivity table above: the window varies by
+       1.00x across fit ranges under the model in use.
+    3. The Stage 2 cleaning parameters (window 17, 5 MAD). sigma, Gamma and alpha are all
+       measured on Stage-2-cleaned data.
+    MSD(tau) never flattened, so no confinement timescale exists in this data and no upper
+    cap could be derived. Nothing measured bounds the window from above at all.
+    The sensitivity table below is the evidence for judging whether the window in use is
+    right. None of the three choices is self-justifying.
+
+Stage 4 -- reject and smooth
+------------------------------------------------------------------------------
+  Hampel: window 5 frames, threshold 4 MAD, MAD floor 2
+  outliers flagged: 109 of 5465 finite points (1.995%)
+  Flagged points are set to NaN and REMOVED. They are not interpolated, forward-filled or imputed.
+
+  Per-track outlier rate distribution:
+    tracks                 : 70
+    tracks with 0 outliers : 23 (32.9%)
+    rate min / q25 / median / q75 / max : 0.00% / 0.00% / 1.48% / 3.33% / 10.61%
+    tracks above the stated 10% rate : 1
+    they contribute 7 of 109 outliers (6.4% of the total)
+      Track_ID  outliers  points     rate
+          1853         7      66   10.61%
+    A high share concentrated in few tracks points at those tracks; a rate spread evenly across tracks points at the method or the acquisition.
+
+  Sensitivity table (mean |dZ| per frame vs smoothing window; window range 1..33 derived from half the median track length [68], capped at 51):
+     window   no rejection   with rejection  pairs (rej.)
+          1        5.95427           3.9929          5190
+          3        2.43481          1.70787          5190
+          5        1.62582          1.20593          5190
+          7        1.31869          1.00543          5190  <-- chosen
+          9        1.10218         0.856577          5190
+         11       0.984615         0.759012          5190
+         13       0.896528         0.717096          5190
+         15       0.826918         0.662362          5190
+         17       0.740237         0.607171          5190
+         19       0.700418         0.575557          5190
+         21       0.641328         0.531641          5190
+         23       0.588183         0.485707          5190
+         25       0.524036          0.44645          5190
+         27       0.502717         0.427648          5190
+         29       0.482186         0.410528          5190
+         31       0.448468         0.384998          5190
+         33       0.425513         0.377129          5190
+  (This table is printed regardless of which window was chosen; it is the evidence for the choice. 'no rejection' smooths the raw Z; 'with rejection' smooths after Stage 4a removal.)
+
+  Speed proxy (mean |dZ| between consecutive available points, normalised per frame):
+    raw Z                            : 5.95427 per frame (5395 intervals)
+    rejected + smoothed (W=7)        : 1.00543 per frame (5190 intervals)
+    raw Z                            : 11.9085 per second (--frame-interval 0.5 s, report only)
+    rejected + smoothed (W=7)        : 2.01086 per second
+
+  Wrote out\four_neighbor_mean_results_table_smoothed.csv
+    columns: Track_ID, Frame, X, Y, Z, Z_raw, Z_smoothed, outlier_flag, run_stamp, derivation_note
+    run_stamp = 7bb10d0dfaa2 on every row
+    derivation_note = 'WINDOW_NOT_DETERMINED;CONFINEMENT_UNBOUNDED' on every row
+    Z_smoothed defined at 5356 of 5465 rows (98.01%); undefined where Z was blank or the point was rejected.
+    The original Track_ID, Frame, X, Y and Z columns are reproduced verbatim from the input text; nothing was overwritten.
+  Wrote out\four_neighbor_mean_results_table_diagnostics.png
+
+==============================================================================
+PARAMETER BLOCK -- four_neighbor_mean_results_table.csv
+(quote this verbatim; do not re-type values out of the prose above)
+==============================================================================
+  derivation stamp                : 7bb10d0dfaa2  (zsmooth-derivation-4)
+  input                           : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\four_neighbor_mean_results_table.csv
+  rows / tracks / NaN Z           : 5465 / 70 / 0
+  Z range (span)                  : 662.5
+  median track length / span      : 68 / 74 frames
+  --z-step supplied               : 2
+  detected lattice spacing        : 0.5
+  z-step verification             : VERIFIED against single_pixel_results_table.csv (spacing 2)
+  Stage 2 window / threshold      : 17 frames / 5 MAD / floor 2
+  Stage 2 removed                 : 114 (2.086%) -- provisional
+  sigma (covariance)              : 4.41256
+  Cov / n pairs                   : -19.4707 / 4737
+  MSD model                       : 2*sigma^2 + Gamma*tau^alpha
+  MSD usable lags                 : 1..37
+  MSD fit range                   : 1..8  (rel residual 0.0161)
+  MSD(1)                          : 58.6756
+  2*sigma^2 (intercept)           : 37.171
+  sigma (fitted)                  : 4.31109
+  noise share of MSD(1)           : 66.37%
+  Gamma                           : 18.595
+  alpha (Stage-2 cleaned)         : 1.1800  [consistent with normal diffusion]  95% CI [0.7199, 1.4005]
+  alpha (no rejection)            : NOT AVAILABLE -- the anomalous model does not converge on the uncleaned MSD at any fit range
+  sqrt(Gamma) motion scale        : 4.31219
+  confinement lag                 : NOT REACHED
+  crossover lag tau*              : 1.7986 frames
+  k (--noise-margin)              : 2
+  W_smooth requirement            : 5.8230 (corrected, before odd-rounding)
+  W_smooth req uncorrected        : 7.9959 (alpha=1 special case; W would be 9)
+  W_alt (model-free, unused)      : 7 (w_req 5.7595, f=1/k^2=0.2500)
+  W_smooth 95% CI                 : [5, 19] (requirement [3.1802, 18.2885])
+  W_smooth derived / in use       : 7 / 7
+  W_hampel derived / in use       : 5 / 5
+  fit-range spread (live, in cap) : lin 1.00x / anom 1.00x
+  fit-range spread (no cap)       : lin 8.60x / anom 7.00x  -- counterfactual, removed by the cap
+  outliers                        : 109 of 5465 (1.995%)
+  per-track outlier rate          : median 1.48%, max 10.61%, 23 clean tracks, 1 above 10% (6.4% of outliers)
+  Z_smoothed defined              : 5356 of 5465 (98.01%)
+  speed raw / smoothed            : 5.95427 / 1.00543 per frame  (11.9085 / 2.01086 per second)
+  STATUS                          : OK
+  output                          : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\out\four_neighbor_mean_results_table_smoothed.csv
+  warnings                        : 2
+                                    - WINDOW_NOT_DETERMINED
+                                    - CONFINEMENT_UNBOUNDED
+==============================================================================
+
+==============================================================================
+four_neighbor_median_results_table.csv
+==============================================================================
+
+Stage 2 -- strict provisional pass (output NOT used as the result)
+------------------------------------------------------------------------------
+  window    : 17 frames (= 0.25 x measured median track length 68, rounded up to odd)
+  threshold : 5 MAD
+  MAD floor : 2 (the supplied --z-step)
+  provisionally removed: 110 of 5465 points (2.013%)
+  Purpose: keep gross outliers out of the Stage 3 fit. This output is discarded afterwards.
+
+  Model-free localisation noise (cross-check, NOT used in any derivation):
+    For independent localisation noise, two successive displacements share an endpoint, so
+    Cov(delta_i, delta_i+1) = -sigma^2. This assumes no MSD model, no power law and no fit range,
+    and it is computed before the fit so it survives a fit that fails.
+    successive-displacement pairs (frames f, f+1, f+2 all present) = 4751
+    Cov(delta_i, delta_i+1) = -15.7349
+    sigma_cov = sqrt(-Cov) = 3.9667 (Z units)
+
+Stage 3 -- measure the motion timescale
+------------------------------------------------------------------------------
+  MSD probed to lag 200; usable lag range 1..37
+    (a lag is usable while it keeps >= 10% of the lag-1 pair count [5043] and stays within half the median track span [37])
+  Model               : MSD(tau) = 2*sigma^2 + Gamma * tau^alpha (anomalous diffusion; alpha is fitted, not assumed)
+  Fit range chosen    : lags 1..8   (rel residual 0.0057)
+    Two criteria bound the range; the smaller wins.
+    1. Model adequacy: extend while the RMS fit residual stays within 10% of the mean MSD
+       over the range. That allows lags 1..37.
+    2. sigma identifiability: sigma is the ZERO-LAG intercept, so only short lags carry information
+       about it. Fitted over a long range, a flexible power law absorbs the short-lag structure into
+       its exponent and the intercept slides to zero and then negative. The cap is the end of the
+       plateau over which the fitted sigma is stable to within 10% across at least
+       3 consecutive ranges. That allows lags 1..8. No lag count is hardcoded.
+       plateau: L=5:4.434, L=6:4.246, L=7:4.312, L=8:4.397
+    Why stability rather than intercept positivity: positivity would take the LAST range before the
+    intercept goes negative, by which point it is already collapsing, and the sigma it returns is far
+    below the independent model-free estimate. The stability cap was chosen because it produces
+    AGREEMENT with the model-free covariance estimator, and that agreement between two estimators
+    sharing no assumptions is the justification for the rule. Compare the two sigma values below.
+    alpha was searched on a dense grid over [0.05, 2] step 0.005; at each alpha the model is linear in 2*sigma^2 and Gamma, so those are exact least squares.
+  MSD(tau) (Z units^2), pooled across tracks, present-pairs only:
+      lag            MSD     pairs
+        1        60.6389      5043  (in fit)
+        2        85.8319      4854  (in fit)
+        3         113.68      4734  (in fit)
+        4         143.37      4641  (in fit)
+        5        172.696      4560  (in fit)
+        6        200.077      4482  (in fit)
+        7        232.059      4418  (in fit)
+        8        264.704      4364  (in fit)
+        9        278.686      4306
+       10        289.159      4246
+       11        312.606      4182
+       12        316.512      4128
+       13        291.376      4064
+       14        293.643      4000
+       15        302.333      3950
+       16         324.65      3903
+       17        327.503      3855
+       18        315.655      3795
+       19        321.209      3736
+       20        326.051      3675
+       21        359.389      3608
+       22        365.904      3547
+       23        375.384      3489
+       24        386.476      3435
+       25        420.839      3382
+       26        458.807      3319
+       27        469.022      3271
+       28        480.869      3219
+       29        488.742      3162
+       30         495.97      3099
+       31        499.936      3028
+       32        514.561      2980
+       33        502.501      2929
+       34        491.381      2879
+       35        496.903      2816
+       36        496.552      2753
+       37        502.228      2699
+
+  Noise share of MSD(1): 2*sigma_cov^2 / MSD(1) = 2*15.7349 / 60.6389 = 51.90%
+    That percentage is the quantitative justification for smoothing at all: it is how much of
+    the frame-to-frame variation is measurement rather than movement.
+    Read the two terms differently. MSD(1) is a mean of SQUARES and is highly sensitive to the
+    Stage 2 settings -- on this data it moves by over 100% between reasonable Stage 2 choices,
+    because a handful of retained outliers dominate a mean of squares. sigma_cov over the same
+    range of settings moves by a few percent. The covariance estimator is comparatively robust;
+    the share, inheriting MSD(1)'s denominator, is not. Trust sigma_cov more than the percentage.
+  Measured quantities :
+    MSD intercept 2*sigma^2 = 38.6676
+    localisation noise sigma = 4.39702 (Z units)
+    transport coefficient Gamma = 21.9359 (Z units^2 per frame^alpha)
+    anomalous exponent alpha = 1.1200  [consistent with normal diffusion]
+      alpha = 1 is normal diffusion; below 1 subdiffusive; above 1 superdiffusive or directed.
+      alpha on unrejected data is NOT AVAILABLE: the anomalous model does not converge on the uncleaned MSD at any fit range.
+      It is deliberately not forced over the cleaned data's fit range: fitting it where it is not
+      conditioned would reintroduce the over-extended-range misspecification the stability cap
+      removes. The size of the Stage 2 artifact is therefore unknown for this method.
+    single-frame motion scale sqrt(Gamma) = 4.68358 (Z units)
+    noise/motion crossover lag tau* = (2*sigma^2/Gamma)^(1/alpha) = 1.6589 frames
+    confinement lag = NOT REACHED within lags 1..37
+  Derived windows     :
+    smoothing window: smallest odd W with noise(W)/motion(W) <= 1/2^2 at lag 1, where
+      noise(W) = 2*sigma^2*W^-2 and motion(W) = Gamma*W^(alpha-2), so ratio(W) = 2*sigma^2/(Gamma*W^alpha)
+      -> W >= (2*2^2*sigma^2/Gamma)^(1/alpha) = (7.0510)^(1/1.1200) = 5.7196  =>  W_smooth = 7
+      the 1/alpha correction: uncorrected requirement 7.0510 (W = 9) -> corrected 5.7196 (W = 7)
+      The uncorrected form is the alpha = 1 special case. It was what this tool used previously and
+      is systematically wrong away from alpha = 1, silently.
+    Hampel window   : smallest odd W >= 2*tau* + 1 = 4.3178  =>  W_hampel = 5
+
+  UNCERTAINTY ON alpha, AND ON THE WINDOW IT IMPLIES:
+    Method: bootstrap over TRACKS, 200 of 200 replicates converged, 95% percentile interval, seed 20240918.
+    Tracks are the independent units: the MSD is pooled across them, while within a track the
+    lags are strongly correlated, which rules out a residual-based interval and makes a profile
+    likelihood need a noise model this correlation makes intractable. The bootstrap needs none.
+    The fit range is HELD FIXED at 1..8, so this interval is conditional on that
+    range; the dependence on where the fit stops is the fit-range table's job, not this one.
+    alpha      = 1.1200  [0.7297, 1.6919]
+    W_smooth   = 7  [3, 21]   (requirement 5.7196 [2.0277, 20.9510])
+    relative interval width: alpha 0.859, window 3.308 (window is 3.85x alpha's)
+    of which the 1/alpha exponent alone contributes 1.986, an amplification of 2.31x on
+    alpha's own width; the remainder is sigma and Gamma varying too.
+[WARNING: WINDOW_NOT_DETERMINED] four_neighbor_median_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.7297, 1.6919) maps to windows 3..21, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+
+  ALTERNATIVE WINDOW (report only -- NOT used, nothing below depends on it):
+    Transfer functions of the gap-aware moving average at lag 1, MEASURED ON THIS RUN by
+    laying synthetic series over this method's own frames and gaps (seed 20240917,
+    windows [3, 5, 7, 9, 11, 15, 21]):
+      noise  ~ W^-1.930   (structurally expected -2.00)
+      motion ~ W^-0.841   (structurally expected alpha-2 = -0.88; fBm at Hurst 0.560)
+    The noise does NOT divide by W. Successive windows overlap in W-1 of their W points, so
+    their difference is (1/W)*(eps[t+1+h] - eps[t-h]) and its variance falls as 1/W^2. The
+    motion falls as W^(alpha-2): the same difference spans W frames of displacement, which
+    accumulate as W^alpha.
+    Hence ratio = 2*sigma^2 / (Gamma * W^alpha), and requiring ratio <= f gives
+      W >= (2*sigma^2 / (f*Gamma))^(1/alpha).
+    The exponent 1/alpha is not optional. It vanishes at alpha = 1 and dominates away from it;
+    the formula currently IN USE omits it and is correct only at alpha = 1.
+    sigma_cov = 3.9667; noise 2*sigma_cov^2 = 31.4697; MSD(1) = 60.6389
+    measured motion Gamma_meas = MSD(1) - 2*sigma_cov^2 = 29.1692
+    f = 1/k^2 = 0.2500;  2*sigma^2/(f*Gamma) = 4.3155
+    raised to 1/alpha = 0.8929  ->  W >= 3.6897  =>  W_alt = 5
+    (without the 1/alpha correction it would be 5; the current rule in use gives 7)
+    This does NOT remove a free parameter. f is exactly 1/k^2 and plays the identical role;
+    the rule is renamed, not made parameter-free. What it does change is WHERE the inputs
+    come from: sigma and Gamma are both measured here, so the window stops depending on the
+    MSD model and the fit range. That is a robustness gain, not a reduction in free choices.
+
+  Fit-range sensitivity. The discarded linear model is shown ONLY for comparison;
+  nothing is derived from it. Ranges span the usable lag range at 0, 25, 50, 75 and 100%,
+  plus the range actually chosen.
+       range | lin 2sig^2     lin D  lin W |     2sig^2     Gamma   alpha      W  relres
+    1..5     |      30.75     28.17      5 |      39.33     21.16  1.1450      7  0.0027  (within cap)
+    1..6     |      30.63     28.21      5 |      36.05     24.03  1.0750      7  0.0062  (within cap)
+    1..7     |      29.51     28.63      5 |      37.18      23.1  1.0950      7  0.0055  (within cap)
+    1..8     |      27.98     29.14      5 |      38.67     21.94  1.1200      7  0.0057  <-- in use
+    1..13    |      56.74     22.24     11 |     -65.06       112  0.4900      1  0.0713
+    1..21    |      111.2     12.97     35 |     -968.9      1004  0.0900      1  0.0759
+    1..29    |      112.9     12.65     37 |     -44.03     105.1  0.4600      1  0.0882
+    1..37    |      126.7     11.51     45 |        -26     89.87  0.5000      1  0.0744
+
+    NOTE: 4 of 8 fit ranges give a window of 1, i.e. no smoothing at all.
+    The max/min ratio below is dominated by that and should be read as 'the model does not agree with
+    itself about whether to smooth', not as a smooth spread of window sizes.
+    LIVE spread -- across the ranges INSIDE the cap (1..5 through 1..8), which are
+    the ranges the tool could actually have chosen. This is the dependence that remains:
+      linear model (discarded): 1.00x
+      anomalous model (in use): 1.00x
+    COUNTERFACTUAL spread -- across ALL ranges up to 1..37, i.e. what would happen if the
+    stability cap were NOT applied. This is NOT live instability; the cap removes it:
+      linear model (discarded): 9.00x
+      anomalous model (in use): 7.00x
+    The anomalous model LARGELY REMOVES the fit-range sensitivity: the window varies by 1.00x across fit ranges, below the 2x threshold for calling it stable.
+[WARNING: CONFINEMENT_UNBOUNDED] four_neighbor_median_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+
+  IN USE: Hampel window = 5 frames, smoothing window = 7 frames
+
+  HOW THIS SMOOTHING WINDOW WAS SET -- read before using it.
+  It is NOT a measured quantity. It depends on THREE arbitrary choices:
+    1. k, the noise margin (--noise-margin, in use 2). The window scales as k^(2/alpha) = k^1.786:
+       at k = 1 it would be about 3, at k = 4 about 21, against 7 here.
+       (k^2 exactly only at alpha = 1.) k can therefore be moved to reach almost any window,
+       and any downstream speed.
+    2. The MSD fit range. See the fit-range sensitivity table above: the window varies by
+       1.00x across fit ranges under the model in use.
+    3. The Stage 2 cleaning parameters (window 17, 5 MAD). sigma, Gamma and alpha are all
+       measured on Stage-2-cleaned data.
+    MSD(tau) never flattened, so no confinement timescale exists in this data and no upper
+    cap could be derived. Nothing measured bounds the window from above at all.
+    The sensitivity table below is the evidence for judging whether the window in use is
+    right. None of the three choices is self-justifying.
+
+Stage 4 -- reject and smooth
+------------------------------------------------------------------------------
+  Hampel: window 5 frames, threshold 4 MAD, MAD floor 2
+  outliers flagged: 132 of 5465 finite points (2.415%)
+  Flagged points are set to NaN and REMOVED. They are not interpolated, forward-filled or imputed.
+
+  Per-track outlier rate distribution:
+    tracks                 : 70
+    tracks with 0 outliers : 19 (27.1%)
+    rate min / q25 / median / q75 / max : 0.00% / 0.00% / 1.96% / 3.70% / 10.61%
+    tracks above the stated 10% rate : 1
+    they contribute 7 of 132 outliers (5.3% of the total)
+      Track_ID  outliers  points     rate
+          1853         7      66   10.61%
+    A high share concentrated in few tracks points at those tracks; a rate spread evenly across tracks points at the method or the acquisition.
+
+  Sensitivity table (mean |dZ| per frame vs smoothing window; window range 1..33 derived from half the median track length [68], capped at 51):
+     window   no rejection   with rejection  pairs (rej.)
+          1         5.7096           3.8111          5149
+          3         2.3648          1.65008          5149
+          5        1.59286          1.18917          5149
+          7         1.2814         0.974591          5149  <-- chosen
+          9        1.06933         0.826673          5149
+         11       0.957419          0.73535          5149
+         13       0.884581         0.715775          5149
+         15       0.816651         0.659282          5149
+         17       0.721193          0.60489          5149
+         19       0.689106         0.576292          5149
+         21       0.634984         0.518628          5149
+         23       0.582489         0.475711          5149
+         25       0.517679         0.440368          5149
+         27       0.496332         0.422965          5149
+         29       0.474281         0.405996          5149
+         31       0.441304          0.38276          5149
+         33       0.416125         0.372309          5149
+  (This table is printed regardless of which window was chosen; it is the evidence for the choice. 'no rejection' smooths the raw Z; 'with rejection' smooths after Stage 4a removal.)
+
+  Speed proxy (mean |dZ| between consecutive available points, normalised per frame):
+    raw Z                            : 5.7096 per frame (5395 intervals)
+    rejected + smoothed (W=7)        : 0.974591 per frame (5149 intervals)
+    raw Z                            : 11.4192 per second (--frame-interval 0.5 s, report only)
+    rejected + smoothed (W=7)        : 1.94918 per second
+
+  Wrote out\four_neighbor_median_results_table_smoothed.csv
+    columns: Track_ID, Frame, X, Y, Z, Z_raw, Z_smoothed, outlier_flag, run_stamp, derivation_note
+    run_stamp = 7bb10d0dfaa2 on every row
+    derivation_note = 'WINDOW_NOT_DETERMINED;CONFINEMENT_UNBOUNDED' on every row
+    Z_smoothed defined at 5333 of 5465 rows (97.58%); undefined where Z was blank or the point was rejected.
+    The original Track_ID, Frame, X, Y and Z columns are reproduced verbatim from the input text; nothing was overwritten.
+  Wrote out\four_neighbor_median_results_table_diagnostics.png
+
+==============================================================================
+PARAMETER BLOCK -- four_neighbor_median_results_table.csv
+(quote this verbatim; do not re-type values out of the prose above)
+==============================================================================
+  derivation stamp                : 7bb10d0dfaa2  (zsmooth-derivation-4)
+  input                           : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\four_neighbor_median_results_table.csv
+  rows / tracks / NaN Z           : 5465 / 70 / 0
+  Z range (span)                  : 662
+  median track length / span      : 68 / 74 frames
+  --z-step supplied               : 2
+  detected lattice spacing        : 1
+  z-step verification             : VERIFIED against single_pixel_results_table.csv (spacing 2)
+  Stage 2 window / threshold      : 17 frames / 5 MAD / floor 2
+  Stage 2 removed                 : 110 (2.013%) -- provisional
+  sigma (covariance)              : 3.96672
+  Cov / n pairs                   : -15.7349 / 4751
+  MSD model                       : 2*sigma^2 + Gamma*tau^alpha
+  MSD usable lags                 : 1..37
+  MSD fit range                   : 1..8  (rel residual 0.0057)
+  MSD(1)                          : 60.6389
+  2*sigma^2 (intercept)           : 38.6676
+  sigma (fitted)                  : 4.39702
+  noise share of MSD(1)           : 51.90%
+  Gamma                           : 21.9359
+  alpha (Stage-2 cleaned)         : 1.1200  [consistent with normal diffusion]  95% CI [0.7297, 1.6919]
+  alpha (no rejection)            : NOT AVAILABLE -- the anomalous model does not converge on the uncleaned MSD at any fit range
+  sqrt(Gamma) motion scale        : 4.68358
+  confinement lag                 : NOT REACHED
+  crossover lag tau*              : 1.6589 frames
+  k (--noise-margin)              : 2
+  W_smooth requirement            : 5.7196 (corrected, before odd-rounding)
+  W_smooth req uncorrected        : 7.0510 (alpha=1 special case; W would be 9)
+  W_alt (model-free, unused)      : 5 (w_req 3.6897, f=1/k^2=0.2500)
+  W_smooth 95% CI                 : [3, 21] (requirement [2.0277, 20.9510])
+  W_smooth derived / in use       : 7 / 7
+  W_hampel derived / in use       : 5 / 5
+  fit-range spread (live, in cap) : lin 1.00x / anom 1.00x
+  fit-range spread (no cap)       : lin 9.00x / anom 7.00x  -- counterfactual, removed by the cap
+  outliers                        : 132 of 5465 (2.415%)
+  per-track outlier rate          : median 1.96%, max 10.61%, 19 clean tracks, 1 above 10% (5.3% of outliers)
+  Z_smoothed defined              : 5333 of 5465 (97.58%)
+  speed raw / smoothed            : 5.7096 / 0.974591 per frame  (11.4192 / 1.94918 per second)
+  STATUS                          : OK
+  output                          : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\out\four_neighbor_median_results_table_smoothed.csv
+  warnings                        : 2
+                                    - WINDOW_NOT_DETERMINED
+                                    - CONFINEMENT_UNBOUNDED
+==============================================================================
+
+==============================================================================
+radius_mean_results_table.csv
+==============================================================================
+
+Stage 2 -- strict provisional pass (output NOT used as the result)
+------------------------------------------------------------------------------
+  window    : 17 frames (= 0.25 x measured median track length 68, rounded up to odd)
+  threshold : 5 MAD
+  MAD floor : 2 (the supplied --z-step)
+  provisionally removed: 141 of 5465 points (2.580%)
+  Purpose: keep gross outliers out of the Stage 3 fit. This output is discarded afterwards.
+
+  Model-free localisation noise (cross-check, NOT used in any derivation):
+    For independent localisation noise, two successive displacements share an endpoint, so
+    Cov(delta_i, delta_i+1) = -sigma^2. This assumes no MSD model, no power law and no fit range,
+    and it is computed before the fit so it survives a fit that fails.
+    successive-displacement pairs (frames f, f+1, f+2 all present) = 4650
+    Cov(delta_i, delta_i+1) = -352.7895
+    sigma_cov = sqrt(-Cov) = 18.7827 (Z units)
+
+Stage 3 -- measure the motion timescale
+------------------------------------------------------------------------------
+  MSD probed to lag 200; usable lag range 1..37
+    (a lag is usable while it keeps >= 10% of the lag-1 pair count [4980] and stays within half the median track span [37])
+  Model               : MSD(tau) = 2*sigma^2 + Gamma * tau^alpha (anomalous diffusion; alpha is fitted, not assumed)
+  Fit range chosen    : lags 1..9   (rel residual 0.0101)
+    Two criteria bound the range; the smaller wins.
+    1. Model adequacy: extend while the RMS fit residual stays within 10% of the mean MSD
+       over the range. That allows lags 1..33.
+    2. sigma identifiability: sigma is the ZERO-LAG intercept, so only short lags carry information
+       about it. Fitted over a long range, a flexible power law absorbs the short-lag structure into
+       its exponent and the intercept slides to zero and then negative. The cap is the end of the
+       plateau over which the fitted sigma is stable to within 10% across at least
+       3 consecutive ranges. That allows lags 1..9. No lag count is hardcoded.
+       plateau: L=6:15.037, L=7:15.840, L=8:15.001, L=9:14.990
+    Why stability rather than intercept positivity: positivity would take the LAST range before the
+    intercept goes negative, by which point it is already collapsing, and the sigma it returns is far
+    below the independent model-free estimate. The stability cap was chosen because it produces
+    AGREEMENT with the model-free covariance estimator, and that agreement between two estimators
+    sharing no assumptions is the justification for the rule. Compare the two sigma values below.
+    alpha was searched on a dense grid over [0.05, 2] step 0.005; at each alpha the model is linear in 2*sigma^2 and Gamma, so those are exact least squares.
+  MSD(tau) (Z units^2), pooled across tracks, present-pairs only:
+      lag            MSD     pairs
+        1        994.668      4980  (in fit)
+        2        1185.83      4776  (in fit)
+        3        1429.23      4658  (in fit)
+        4        1591.31      4570  (in fit)
+        5        1714.07      4492  (in fit)
+        6           1838      4416  (in fit)
+        7        1984.35      4352  (in fit)
+        8        2075.33      4302  (in fit)
+        9        2193.25      4254  (in fit)
+       10        2239.15      4194
+       11        2328.62      4127
+       12        2332.27      4073
+       13        2467.06      4007
+       14        2567.96      3939
+       15        2694.57      3891
+       16        2733.41      3840
+       17        2803.99      3784
+       18        2804.82      3730
+       19        2761.33      3665
+       20        2767.96      3607
+       21        2773.28      3551
+       22        2823.69      3499
+       23        2829.09      3435
+       24        2810.88      3376
+       25        2882.01      3325
+       26        2858.79      3269
+       27        2934.69      3224
+       28         2941.9      3170
+       29        2951.81      3115
+       30        2964.33      3061
+       31         2974.6      2992
+       32        3005.19      2941
+       33        2954.18      2895
+       34        2948.26      2845
+       35        2985.57      2788
+       36        3005.82      2732
+       37        3075.12      2677
+
+  Noise share of MSD(1): 2*sigma_cov^2 / MSD(1) = 2*352.7895 / 994.6679 = 70.94%
+    That percentage is the quantitative justification for smoothing at all: it is how much of
+    the frame-to-frame variation is measurement rather than movement.
+    Read the two terms differently. MSD(1) is a mean of SQUARES and is highly sensitive to the
+    Stage 2 settings -- on this data it moves by over 100% between reasonable Stage 2 choices,
+    because a handful of retained outliers dominate a mean of squares. sigma_cov over the same
+    range of settings moves by a few percent. The covariance estimator is comparatively robust;
+    the share, inheriting MSD(1)'s denominator, is not. Trust sigma_cov more than the percentage.
+  Measured quantities :
+    MSD intercept 2*sigma^2 = 449.426
+    localisation noise sigma = 14.9904 (Z units)
+    transport coefficient Gamma = 532.009 (Z units^2 per frame^alpha)
+    anomalous exponent alpha = 0.5400  [SUBDIFFUSIVE]
+      alpha = 1 is normal diffusion; below 1 subdiffusive; above 1 superdiffusive or directed.
+      alpha on unrejected data is NOT AVAILABLE: the uncleaned MSD has no stable sigma plateau of its own (longest run 2 range(s), needs 3), so there is no range over which a raw alpha would be conditioned.
+      It is deliberately not forced over the cleaned data's fit range: fitting it where it is not
+      conditioned would reintroduce the over-extended-range misspecification the stability cap
+      removes. The size of the Stage 2 artifact is therefore unknown for this method.
+    single-frame motion scale sqrt(Gamma) = 23.0653 (Z units)
+    noise/motion crossover lag tau* = (2*sigma^2/Gamma)^(1/alpha) = 0.7317 frames
+    confinement lag = 27 frames (no later lag up to 37 exceeds MSD there by more than 5%)
+  Derived windows     :
+    smoothing window: smallest odd W with noise(W)/motion(W) <= 1/2^2 at lag 1, where
+      noise(W) = 2*sigma^2*W^-2 and motion(W) = Gamma*W^(alpha-2), so ratio(W) = 2*sigma^2/(Gamma*W^alpha)
+      -> W >= (2*2^2*sigma^2/Gamma)^(1/alpha) = (3.3791)^(1/0.5400) = 9.5336  =>  W_smooth = 11
+      the 1/alpha correction: uncorrected requirement 3.3791 (W = 5) -> corrected 9.5336 (W = 11)
+      The uncorrected form is the alpha = 1 special case. It was what this tool used previously and
+      is systematically wrong away from alpha = 1, silently.
+    Hampel window   : smallest odd W >= 2*tau* + 1 = 2.4634  =>  W_hampel = 3
+[WARNING: ALPHA_DRIVES_WINDOW] radius_mean_results_table.csv: the 1/alpha correction changes the smoothing-window requirement by 2.82x (uncorrected 3.3791 -> corrected 9.5336; alpha = 0.5400, 1/alpha = 1.8519), above the stated 1.5x threshold. On this dataset alpha materially drives the window, so the window is only as trustworthy as the fitted exponent. Check the fit-range sensitivity table and the plateau before relying on it.
+
+  UNCERTAINTY ON alpha, AND ON THE WINDOW IT IMPLIES:
+    Method: bootstrap over TRACKS, 192 of 200 replicates converged, 95% percentile interval, seed 20240918.
+    Tracks are the independent units: the MSD is pooled across them, while within a track the
+    lags are strongly correlated, which rules out a residual-based interval and makes a profile
+    likelihood need a noise model this correlation makes intractable. The bootstrap needs none.
+    The fit range is HELD FIXED at 1..9, so this interval is conditional on that
+    range; the dependence on where the fit stops is the fit-range table's job, not this one.
+    alpha      = 0.5400  [0.1316, 0.9684]
+    W_smooth   = 11  [1, 37]   (requirement 9.5336 [0.2059, 35.6289])
+    39 of 192 replicates gave a non-positive intercept, i.e. no resolvable noise floor.
+    relative interval width: alpha 1.550, window 3.716 (window is 2.40x alpha's)
+    The 1/alpha exponent alone cannot be quoted here: the alpha interval reaches 0.1316, where 1/alpha diverges and the
+    implied window runs away without bound. That divergence is itself the finding -- an alpha
+    this poorly determined cannot support an exponent.
+[WARNING: WINDOW_NOT_DETERMINED] radius_mean_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.1316, 0.9684) maps to windows 1..37, spanning more than one odd window. The point estimate 11 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+
+  ALTERNATIVE WINDOW (report only -- NOT used, nothing below depends on it):
+    Transfer functions of the gap-aware moving average at lag 1, MEASURED ON THIS RUN by
+    laying synthetic series over this method's own frames and gaps (seed 20240917,
+    windows [3, 5, 7, 9, 11, 15, 21]):
+      noise  ~ W^-1.930   (structurally expected -2.00)
+      motion ~ W^-1.389   (structurally expected alpha-2 = -1.46; fBm at Hurst 0.270)
+    The noise does NOT divide by W. Successive windows overlap in W-1 of their W points, so
+    their difference is (1/W)*(eps[t+1+h] - eps[t-h]) and its variance falls as 1/W^2. The
+    motion falls as W^(alpha-2): the same difference spans W frames of displacement, which
+    accumulate as W^alpha.
+    Hence ratio = 2*sigma^2 / (Gamma * W^alpha), and requiring ratio <= f gives
+      W >= (2*sigma^2 / (f*Gamma))^(1/alpha).
+    The exponent 1/alpha is not optional. It vanishes at alpha = 1 and dominates away from it;
+    the formula currently IN USE omits it and is correct only at alpha = 1.
+    sigma_cov = 18.7827; noise 2*sigma_cov^2 = 705.5789; MSD(1) = 994.6679
+    measured motion Gamma_meas = MSD(1) - 2*sigma_cov^2 = 289.0889
+    f = 1/k^2 = 0.2500;  2*sigma^2/(f*Gamma) = 9.7628
+    raised to 1/alpha = 1.8519  ->  W >= 68.0056  =>  W_alt = 69
+    (without the 1/alpha correction it would be 11; the current rule in use gives 11)
+    This does NOT remove a free parameter. f is exactly 1/k^2 and plays the identical role;
+    the rule is renamed, not made parameter-free. What it does change is WHERE the inputs
+    come from: sigma and Gamma are both measured here, so the window stops depending on the
+    MSD model and the fit range. That is a robustness gain, not a reduction in free choices.
+
+  Fit-range sensitivity. The discarded linear model is shown ONLY for comparison;
+  nothing is derived from it. Ranges span the usable lag range at 0, 25, 50, 75 and 100%,
+  plus the range actually chosen.
+       range | lin 2sig^2     lin D  lin W |     2sig^2     Gamma   alpha      W  relres
+    1..5     |      829.7     184.4     19 |      550.7     434.1  0.6200     15  0.0144  (within cap)
+    1..6     |      862.5     170.4     21 |      452.2     530.1  0.5400     11  0.0133  (within cap)
+    1..7     |      882.7     162.8     23 |      501.8     482.4  0.5750     13  0.0120  (within cap)
+    1..8     |      910.2     153.6     25 |      450.1     531.6  0.5400     11  0.0111  (within cap)
+    1..9     |      932.4       147     27 |      449.4       532  0.5400     11  0.0101  <-- in use
+    1..13    |       1055     117.1     37 |      70.18     892.3  0.3850      1  0.0153
+    1..21    |       1245     87.21     59 |     -355.3      1289  0.3050      1  0.0272
+    1..29    |       1468     61.47     97 |      -3713      4581  0.1150      1  0.0326
+    1..37    |       1643     46.16    143 |           (anomalous fit did not converge)
+
+    NOTE: 3 of 8 fit ranges give a window of 1, i.e. no smoothing at all.
+    The max/min ratio below is dominated by that and should be read as 'the model does not agree with
+    itself about whether to smooth', not as a smooth spread of window sizes.
+    LIVE spread -- across the ranges INSIDE the cap (1..5 through 1..9), which are
+    the ranges the tool could actually have chosen. This is the dependence that remains:
+      linear model (discarded): 1.42x
+      anomalous model (in use): 1.36x
+    COUNTERFACTUAL spread -- across ALL ranges up to 1..37, i.e. what would happen if the
+    stability cap were NOT applied. This is NOT live instability; the cap removes it:
+      linear model (discarded): 7.53x
+      anomalous model (in use): 15.00x
+    The anomalous model LARGELY REMOVES the fit-range sensitivity: the window varies by 1.36x across fit ranges, below the 2x threshold for calling it stable.
+[WARNING: ANOMALOUS_DIFFUSION] radius_mean_results_table.csv: the fitted anomalous exponent is alpha = 0.5400, which departs from 1 by more than the stated 0.2. The motion is subdiffusive, so a linear MSD model would have been misspecified here: it would have absorbed the curvature into the intercept and the slope, making the localisation noise and the motion scale both depend on where the fit range stopped. The fitted model is used instead. See the fit-range sensitivity table for what that changes.
+
+  IN USE: Hampel window = 3 frames, smoothing window = 11 frames
+
+******************************************************************************
+  DO NOT USE THESE WINDOWS. radius_mean_results_table.csv was flagged in Stage 1c as disagreeing with the
+  consensus of the other methods. The windows above are derived from its sigma, Gamma and
+  alpha, so they inherit that inconsistency: they describe whatever this method measured,
+  which the other methods contradict. The numbers are reported in full and the derivation is
+  unchanged -- they are simply not a sound basis for smoothing parameters. Resolve the
+  disagreement first, or take windows from a method that is consistent with the consensus.
+  
+  AND THE EXPONENT AMPLIFIES IT. This method's alpha is 0.5400, so the window requirement
+  is raised to 1/alpha = 1.8519. An exponent that is itself a product of the
+  sampling problem is being used as a POWER, so any error in it is amplified, not merely
+  carried through: the uncorrected requirement 3.3791 becomes 9.5336.
+  Note this alpha is NOT an over-extended-fit artifact -- it sits on a proper stability
+  plateau with sigma stable across it. It is genuinely anomalous for THIS method while every
+  consensus-consistent method is near 1, which is itself further evidence of the sampling
+  problem rather than a reason to trust the number. This is the least trustworthy window in
+  the report.
+******************************************************************************
+
+  HOW THIS SMOOTHING WINDOW WAS SET -- read before using it.
+  It is NOT a measured quantity. It depends on THREE arbitrary choices:
+    1. k, the noise margin (--noise-margin, in use 2). The window scales as k^(2/alpha) = k^3.704:
+       at k = 1 it would be about 1, at k = 4 about 125, against 11 here.
+       (k^2 exactly only at alpha = 1.) k can therefore be moved to reach almost any window,
+       and any downstream speed.
+    2. The MSD fit range. See the fit-range sensitivity table above: the window varies by
+       1.36x across fit ranges under the model in use.
+    3. The Stage 2 cleaning parameters (window 17, 5 MAD). sigma, Gamma and alpha are all
+       measured on Stage-2-cleaned data.
+    A confinement lag of 27 frames does cap the window from above; that cap
+    is measured, the rest is not.
+    The sensitivity table below is the evidence for judging whether the window in use is
+    right. None of the three choices is self-justifying.
+
+Stage 4 -- reject and smooth
+------------------------------------------------------------------------------
+  Hampel: window 3 frames, threshold 4 MAD, MAD floor 2
+  outliers flagged: 270 of 5465 finite points (4.941%)
+  Flagged points are set to NaN and REMOVED. They are not interpolated, forward-filled or imputed.
+
+  Per-track outlier rate distribution:
+    tracks                 : 70
+    tracks with 0 outliers : 5 (7.1%)
+    rate min / q25 / median / q75 / max : 0.00% / 2.41% / 4.26% / 7.00% / 20.93%
+    tracks above the stated 10% rate : 3
+    they contribute 24 of 270 outliers (8.9% of the total)
+      Track_ID  outliers  points     rate
+            76         9      43   20.93%
+           233         7      62   11.29%
+            36         8      76   10.53%
+    A high share concentrated in few tracks points at those tracks; a rate spread evenly across tracks points at the method or the acquisition.
+
+  Sensitivity table (mean |dZ| per frame vs smoothing window; window range 1..33 derived from half the median track length [68], capped at 51):
+     window   no rejection   with rejection  pairs (rej.)
+          1        20.0192          18.3603          4880
+          3        8.20492          7.74306          4880
+          5        5.31076          5.02476          4880
+          7        4.05495          3.89471          4880
+          9        3.32974          3.23563          4880
+         11        2.84534          2.79349          4880  <-- chosen
+         13        2.49989          2.44701          4880
+         15         2.2622          2.21146          4880
+         17         2.0247          1.97877          4880
+         19        1.84162          1.79869          4880
+         21        1.66994          1.62328          4880
+         23        1.53444          1.49735          4880
+         25        1.39806          1.36661          4880
+         27        1.29625          1.26649          4880
+         29        1.21621          1.19005          4880
+         31        1.13811          1.11287          4880
+         33         1.0804          1.06351          4880
+  (This table is printed regardless of which window was chosen; it is the evidence for the choice. 'no rejection' smooths the raw Z; 'with rejection' smooths after Stage 4a removal.)
+
+  Speed proxy (mean |dZ| between consecutive available points, normalised per frame):
+    raw Z                            : 20.0192 per frame (5395 intervals)
+    rejected + smoothed (W=11)       : 2.79349 per frame (4880 intervals)
+    raw Z                            : 40.0384 per second (--frame-interval 0.5 s, report only)
+    rejected + smoothed (W=11)       : 5.58698 per second
+
+  Wrote out\radius_mean_results_table_smoothed.csv
+    columns: Track_ID, Frame, X, Y, Z, Z_raw, Z_smoothed, outlier_flag, run_stamp, derivation_note
+    run_stamp = 7bb10d0dfaa2 on every row
+    derivation_note = 'DO_NOT_USE:flagged-inconsistent;WINDOW_NOT_DETERMINED;ALPHA_DRIVES_WINDOW;ANOMALOUS_DIFFUSION' on every row
+    Z_smoothed defined at 5195 of 5465 rows (95.06%); undefined where Z was blank or the point was rejected.
+    The original Track_ID, Frame, X, Y and Z columns are reproduced verbatim from the input text; nothing was overwritten.
+  Wrote out\radius_mean_results_table_diagnostics.png
+
+==============================================================================
+PARAMETER BLOCK -- radius_mean_results_table.csv
+(quote this verbatim; do not re-type values out of the prose above)
+==============================================================================
+  derivation stamp                : 7bb10d0dfaa2  (zsmooth-derivation-4)
+  input                           : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\radius_mean_results_table.csv
+  rows / tracks / NaN Z           : 5465 / 70 / 0
+  Z range (span)                  : 691.22
+  median track length / span      : 68 / 74 frames
+  --z-step supplied               : 2
+  detected lattice spacing        : none (continuous)
+  z-step verification             : VERIFIED against single_pixel_results_table.csv (spacing 2)
+  Stage 2 window / threshold      : 17 frames / 5 MAD / floor 2
+  Stage 2 removed                 : 141 (2.580%) -- provisional
+  sigma (covariance)              : 18.7827
+  Cov / n pairs                   : -352.7895 / 4650
+  MSD model                       : 2*sigma^2 + Gamma*tau^alpha
+  MSD usable lags                 : 1..37
+  MSD fit range                   : 1..9  (rel residual 0.0101)
+  MSD(1)                          : 994.668
+  2*sigma^2 (intercept)           : 449.426
+  sigma (fitted)                  : 14.9904
+  noise share of MSD(1)           : 70.94%
+  Gamma                           : 532.009
+  alpha (Stage-2 cleaned)         : 0.5400  [SUBDIFFUSIVE]  95% CI [0.1316, 0.9684]
+  alpha (no rejection)            : NOT AVAILABLE -- the uncleaned MSD has no stable sigma plateau of its own (longest run 2 range(s), needs 3), so there is no range over which a raw alpha would be conditioned
+  sqrt(Gamma) motion scale        : 23.0653
+  confinement lag                 : 27 frames
+  crossover lag tau*              : 0.7317 frames
+  k (--noise-margin)              : 2
+  W_smooth requirement            : 9.5336 (corrected, before odd-rounding)
+  W_smooth req uncorrected        : 3.3791 (alpha=1 special case; W would be 5)
+  W_alt (model-free, unused)      : 69 (w_req 68.0056, f=1/k^2=0.2500)
+  W_smooth 95% CI                 : [1, 37] (requirement [0.2059, 35.6289])
+  W_smooth derived / in use       : 11 / 11
+  W_hampel derived / in use       : 3 / 3
+  fit-range spread (live, in cap) : lin 1.42x / anom 1.36x
+  fit-range spread (no cap)       : lin 7.53x / anom 15.00x  -- counterfactual, removed by the cap
+  outliers                        : 270 of 5465 (4.941%)
+  per-track outlier rate          : median 4.26%, max 20.93%, 5 clean tracks, 3 above 10% (8.9% of outliers)
+  Z_smoothed defined              : 5195 of 5465 (95.06%)
+  speed raw / smoothed            : 20.0192 / 2.79349 per frame  (40.0384 / 5.58698 per second)
+  STATUS                          : OK -- WINDOWS NOT SOUND: method flagged as inconsistent with the consensus of the others (Stage 1c); do not use them
+  output                          : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\out\radius_mean_results_table_smoothed.csv
+  warnings                        : 3
+                                    - ALPHA_DRIVES_WINDOW
+                                    - WINDOW_NOT_DETERMINED
+                                    - ANOMALOUS_DIFFUSION
+==============================================================================
+
+==============================================================================
+radius_median_results_table.csv
+==============================================================================
+
+Stage 2 -- strict provisional pass (output NOT used as the result)
+------------------------------------------------------------------------------
+  window    : 17 frames (= 0.25 x measured median track length 68, rounded up to odd)
+  threshold : 5 MAD
+  MAD floor : 2 (the supplied --z-step)
+  provisionally removed: 140 of 5465 points (2.562%)
+  Purpose: keep gross outliers out of the Stage 3 fit. This output is discarded afterwards.
+
+  Model-free localisation noise (cross-check, NOT used in any derivation):
+    For independent localisation noise, two successive displacements share an endpoint, so
+    Cov(delta_i, delta_i+1) = -sigma^2. This assumes no MSD model, no power law and no fit range,
+    and it is computed before the fit so it survives a fit that fails.
+    successive-displacement pairs (frames f, f+1, f+2 all present) = 4705
+    Cov(delta_i, delta_i+1) = -32.7599
+    sigma_cov = sqrt(-Cov) = 5.7236 (Z units)
+
+Stage 3 -- measure the motion timescale
+------------------------------------------------------------------------------
+  MSD probed to lag 200; usable lag range 1..37
+    (a lag is usable while it keeps >= 10% of the lag-1 pair count [5000] and stays within half the median track span [37])
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+METHOD FAILED: radius_median_results_table.csv: the fitted sigma has no stable plateau. Starting from lag 5, no run of at least 3 consecutive fit ranges holds sigma to within 10% (longest stable run found: 2 range(s), over fit ranges 1..5 through 1..6), so there is no range over which the noise floor is identifiable. No fit range is chosen and no window is derived. The tool does NOT fall back to the largest positive-intercept range, nor to any other rule.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  No plot can be produced: the MSD could not be characterised.
+
+==============================================================================
+PARAMETER BLOCK -- radius_median_results_table.csv  [FAILED]
+(quote this verbatim; do not re-type values out of the prose above)
+==============================================================================
+  derivation stamp           : 7bb10d0dfaa2  (zsmooth-derivation-4)
+  input                      : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\radius_median_results_table.csv
+  rows / tracks / NaN Z      : 5465 / 70 / 0
+  Z range (span)             : 784
+  median track length / span : 68 / 74 frames
+  --z-step supplied          : 2
+  detected lattice spacing   : 1
+  z-step verification        : VERIFIED against single_pixel_results_table.csv (spacing 2)
+  Stage 2 window / threshold : 17 frames / 5 MAD / floor 2
+  Stage 2 removed            : 140 (2.562%) -- provisional
+  sigma (covariance)         : 5.72363
+  Cov / n pairs              : -32.7599 / 4705
+  STATUS                     : FAILED -- DERIVATION_FAILED (MSD not characterised)
+  failure                    : radius_median_results_table.csv: the fitted sigma has no stable plateau. Starting from lag 5, no run of at least 3 consecutive fit ranges holds sigma to within 10% (longest stable run found: 2 range(s), over fit ranges 1..5 through 1..6), so there is no range over which the noise floor is identifiable. No fit range is chosen and no window is derived. The tool does NOT fall back to the largest positive-intercept range, nor to any other rule.
+  warnings                   : none
+==============================================================================
+
+==============================================================================
+single_pixel_results_table.csv
+==============================================================================
+
+Stage 2 -- strict provisional pass (output NOT used as the result)
+------------------------------------------------------------------------------
+  window    : 17 frames (= 0.25 x measured median track length 68, rounded up to odd)
+  threshold : 5 MAD
+  MAD floor : 2 (the supplied --z-step)
+  provisionally removed: 134 of 5465 points (2.452%)
+  Purpose: keep gross outliers out of the Stage 3 fit. This output is discarded afterwards.
+
+  Model-free localisation noise (cross-check, NOT used in any derivation):
+    For independent localisation noise, two successive displacements share an endpoint, so
+    Cov(delta_i, delta_i+1) = -sigma^2. This assumes no MSD model, no power law and no fit range,
+    and it is computed before the fit so it survives a fit that fails.
+    successive-displacement pairs (frames f, f+1, f+2 all present) = 4704
+    Cov(delta_i, delta_i+1) = -18.8056
+    sigma_cov = sqrt(-Cov) = 4.3365 (Z units)
+
+Stage 3 -- measure the motion timescale
+------------------------------------------------------------------------------
+  MSD probed to lag 200; usable lag range 1..37
+    (a lag is usable while it keeps >= 10% of the lag-1 pair count [5006] and stays within half the median track span [37])
+  Model               : MSD(tau) = 2*sigma^2 + Gamma * tau^alpha (anomalous diffusion; alpha is fitted, not assumed)
+  Fit range chosen    : lags 1..8   (rel residual 0.0086)
+    Two criteria bound the range; the smaller wins.
+    1. Model adequacy: extend while the RMS fit residual stays within 10% of the mean MSD
+       over the range. That allows lags 1..37.
+    2. sigma identifiability: sigma is the ZERO-LAG intercept, so only short lags carry information
+       about it. Fitted over a long range, a flexible power law absorbs the short-lag structure into
+       its exponent and the intercept slides to zero and then negative. The cap is the end of the
+       plateau over which the fitted sigma is stable to within 10% across at least
+       3 consecutive ranges. That allows lags 1..8. No lag count is hardcoded.
+       plateau: L=5:4.513, L=6:4.358, L=7:4.305, L=8:4.418
+    Why stability rather than intercept positivity: positivity would take the LAST range before the
+    intercept goes negative, by which point it is already collapsing, and the sigma it returns is far
+    below the independent model-free estimate. The stability cap was chosen because it produces
+    AGREEMENT with the model-free covariance estimator, and that agreement between two estimators
+    sharing no assumptions is the justification for the rule. Compare the two sigma values below.
+    alpha was searched on a dense grid over [0.05, 2] step 0.005; at each alpha the model is linear in 2*sigma^2 and Gamma, so those are exact least squares.
+  MSD(tau) (Z units^2), pooled across tracks, present-pairs only:
+      lag            MSD     pairs
+        1        65.0276      5006  (in fit)
+        2        88.5568      4820  (in fit)
+        3        120.155      4702  (in fit)
+        4        149.396      4614  (in fit)
+        5        177.275      4530  (in fit)
+        6        205.314      4449  (in fit)
+        7        234.357      4386  (in fit)
+        8        266.913      4330  (in fit)
+        9        279.447      4277
+       10        289.776      4216
+       11        315.003      4149
+       12        319.112      4099
+       13        292.764      4037
+       14        298.644      3971
+       15        309.364      3924
+       16        328.723      3878
+       17        327.745      3826
+       18        315.141      3763
+       19        318.396      3704
+       20        327.941      3648
+       21        359.925      3586
+       22        361.973      3528
+       23         374.36      3462
+       24        388.759      3406
+       25        425.337      3349
+       26        463.469      3292
+       27        475.361      3243
+       28        484.915      3190
+       29         490.32      3134
+       30        498.014      3075
+       31        505.911      3002
+       32        517.356      2956
+       33        511.661      2904
+       34        498.327      2854
+       35        503.406      2789
+       36        503.062      2730
+       37        503.348      2675
+
+  Noise share of MSD(1): 2*sigma_cov^2 / MSD(1) = 2*18.8056 / 65.0276 = 57.84%
+    That percentage is the quantitative justification for smoothing at all: it is how much of
+    the frame-to-frame variation is measurement rather than movement.
+    Read the two terms differently. MSD(1) is a mean of SQUARES and is highly sensitive to the
+    Stage 2 settings -- on this data it moves by over 100% between reasonable Stage 2 choices,
+    because a handful of retained outliers dominate a mean of squares. sigma_cov over the same
+    range of settings moves by a few percent. The covariance estimator is comparatively robust;
+    the share, inheriting MSD(1)'s denominator, is not. Trust sigma_cov more than the percentage.
+  Measured quantities :
+    MSD intercept 2*sigma^2 = 39.0384
+    localisation noise sigma = 4.41805 (Z units)
+    transport coefficient Gamma = 25.0209 (Z units^2 per frame^alpha)
+    anomalous exponent alpha = 1.0600  [consistent with normal diffusion]
+      alpha = 1 is normal diffusion; below 1 subdiffusive; above 1 superdiffusive or directed.
+      alpha on unrejected data is NOT AVAILABLE: the anomalous model does not converge on the uncleaned MSD at any fit range.
+      It is deliberately not forced over the cleaned data's fit range: fitting it where it is not
+      conditioned would reintroduce the over-extended-range misspecification the stability cap
+      removes. The size of the Stage 2 artifact is therefore unknown for this method.
+    single-frame motion scale sqrt(Gamma) = 5.00209 (Z units)
+    noise/motion crossover lag tau* = (2*sigma^2/Gamma)^(1/alpha) = 1.5214 frames
+    confinement lag = NOT REACHED within lags 1..37
+  Derived windows     :
+    smoothing window: smallest odd W with noise(W)/motion(W) <= 1/2^2 at lag 1, where
+      noise(W) = 2*sigma^2*W^-2 and motion(W) = Gamma*W^(alpha-2), so ratio(W) = 2*sigma^2/(Gamma*W^alpha)
+      -> W >= (2*2^2*sigma^2/Gamma)^(1/alpha) = (6.2409)^(1/1.0600) = 5.6264  =>  W_smooth = 7
+      the 1/alpha correction: uncorrected requirement 6.2409 (W = 7) -> corrected 5.6264 (W = 7)
+      The uncorrected form is the alpha = 1 special case. It was what this tool used previously and
+      is systematically wrong away from alpha = 1, silently.
+    Hampel window   : smallest odd W >= 2*tau* + 1 = 4.0429  =>  W_hampel = 5
+
+  UNCERTAINTY ON alpha, AND ON THE WINDOW IT IMPLIES:
+    Method: bootstrap over TRACKS, 200 of 200 replicates converged, 95% percentile interval, seed 20240918.
+    Tracks are the independent units: the MSD is pooled across them, while within a track the
+    lags are strongly correlated, which rules out a residual-based interval and makes a profile
+    likelihood need a noise model this correlation makes intractable. The bootstrap needs none.
+    The fit range is HELD FIXED at 1..8, so this interval is conditional on that
+    range; the dependence on where the fit stops is the fit-range table's job, not this one.
+    alpha      = 1.0600  [0.6344, 1.4116]
+    W_smooth   = 7  [3, 23]   (requirement 5.6264 [1.3961, 21.4971])
+    relative interval width: alpha 0.733, window 3.573 (window is 4.87x alpha's)
+    of which the 1/alpha exponent alone contributes 2.537, an amplification of 3.46x on
+    alpha's own width; the remainder is sigma and Gamma varying too.
+[WARNING: WINDOW_NOT_DETERMINED] single_pixel_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.6344, 1.4116) maps to windows 3..23, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+
+  ALTERNATIVE WINDOW (report only -- NOT used, nothing below depends on it):
+    Transfer functions of the gap-aware moving average at lag 1, MEASURED ON THIS RUN by
+    laying synthetic series over this method's own frames and gaps (seed 20240917,
+    windows [3, 5, 7, 9, 11, 15, 21]):
+      noise  ~ W^-1.930   (structurally expected -2.00)
+      motion ~ W^-0.895   (structurally expected alpha-2 = -0.94; fBm at Hurst 0.530)
+    The noise does NOT divide by W. Successive windows overlap in W-1 of their W points, so
+    their difference is (1/W)*(eps[t+1+h] - eps[t-h]) and its variance falls as 1/W^2. The
+    motion falls as W^(alpha-2): the same difference spans W frames of displacement, which
+    accumulate as W^alpha.
+    Hence ratio = 2*sigma^2 / (Gamma * W^alpha), and requiring ratio <= f gives
+      W >= (2*sigma^2 / (f*Gamma))^(1/alpha).
+    The exponent 1/alpha is not optional. It vanishes at alpha = 1 and dominates away from it;
+    the formula currently IN USE omits it and is correct only at alpha = 1.
+    sigma_cov = 4.3365; noise 2*sigma_cov^2 = 37.6113; MSD(1) = 65.0276
+    measured motion Gamma_meas = MSD(1) - 2*sigma_cov^2 = 27.4163
+    f = 1/k^2 = 0.2500;  2*sigma^2/(f*Gamma) = 5.4874
+    raised to 1/alpha = 0.9434  ->  W >= 4.9833  =>  W_alt = 5
+    (without the 1/alpha correction it would be 7; the current rule in use gives 7)
+    This does NOT remove a free parameter. f is exactly 1/k^2 and plays the identical role;
+    the rule is renamed, not made parameter-free. What it does change is WHERE the inputs
+    come from: sigma and Gamma are both measured here, so the window stops depending on the
+    MSD model and the fit range. That is a robustness gain, not a reduction in free choices.
+
+  Fit-range sensitivity. The discarded linear model is shown ONLY for comparison;
+  nothing is derived from it. Ranges span the usable lag range at 0, 25, 50, 75 and 100%,
+  plus the range actually chosen.
+       range | lin 2sig^2     lin D  lin W |     2sig^2     Gamma   alpha      W  relres
+    1..5     |      34.48     28.53      5 |      40.73     23.39  1.1000      7  0.0115  (within cap)
+    1..6     |       34.6     28.48      5 |      37.98     25.85  1.0450      7  0.0106  (within cap)
+    1..7     |      34.49     28.52      5 |      37.07     26.63  1.0300      7  0.0090  (within cap)
+    1..8     |      33.43     28.88      5 |      39.04     25.02  1.0600      7  0.0086  <-- in use
+    1..13    |      62.33      21.9     13 |     -65.17     116.7  0.4750      1  0.0679
+    1..21    |      116.3     12.75     37 |      -1180      1220  0.0750      1  0.0733
+    1..29    |      116.7     12.57     39 |     -32.88     99.81  0.4700      1  0.0902
+    1..37    |      129.2     11.54     45 |     -9.137     80.36  0.5250      1  0.0760
+
+    NOTE: 4 of 8 fit ranges give a window of 1, i.e. no smoothing at all.
+    The max/min ratio below is dominated by that and should be read as 'the model does not agree with
+    itself about whether to smooth', not as a smooth spread of window sizes.
+    LIVE spread -- across the ranges INSIDE the cap (1..5 through 1..8), which are
+    the ranges the tool could actually have chosen. This is the dependence that remains:
+      linear model (discarded): 1.00x
+      anomalous model (in use): 1.00x
+    COUNTERFACTUAL spread -- across ALL ranges up to 1..37, i.e. what would happen if the
+    stability cap were NOT applied. This is NOT live instability; the cap removes it:
+      linear model (discarded): 9.00x
+      anomalous model (in use): 7.00x
+    The anomalous model LARGELY REMOVES the fit-range sensitivity: the window varies by 1.00x across fit ranges, below the 2x threshold for calling it stable.
+[WARNING: CONFINEMENT_UNBOUNDED] single_pixel_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+
+  IN USE: Hampel window = 5 frames, smoothing window = 7 frames
+
+  HOW THIS SMOOTHING WINDOW WAS SET -- read before using it.
+  It is NOT a measured quantity. It depends on THREE arbitrary choices:
+    1. k, the noise margin (--noise-margin, in use 2). The window scales as k^(2/alpha) = k^1.887:
+       at k = 1 it would be about 3, at k = 4 about 21, against 7 here.
+       (k^2 exactly only at alpha = 1.) k can therefore be moved to reach almost any window,
+       and any downstream speed.
+    2. The MSD fit range. See the fit-range sensitivity table above: the window varies by
+       1.00x across fit ranges under the model in use.
+    3. The Stage 2 cleaning parameters (window 17, 5 MAD). sigma, Gamma and alpha are all
+       measured on Stage-2-cleaned data.
+    MSD(tau) never flattened, so no confinement timescale exists in this data and no upper
+    cap could be derived. Nothing measured bounds the window from above at all.
+    The sensitivity table below is the evidence for judging whether the window in use is
+    right. None of the three choices is self-justifying.
+
+Stage 4 -- reject and smooth
+------------------------------------------------------------------------------
+  Hampel: window 5 frames, threshold 4 MAD, MAD floor 2
+  outliers flagged: 166 of 5465 finite points (3.038%)
+  Flagged points are set to NaN and REMOVED. They are not interpolated, forward-filled or imputed.
+
+  Per-track outlier rate distribution:
+    tracks                 : 70
+    tracks with 0 outliers : 19 (27.1%)
+    rate min / q25 / median / q75 / max : 0.00% / 0.00% / 2.25% / 4.93% / 15.15%
+    tracks above the stated 10% rate : 4
+    they contribute 28 of 166 outliers (16.9% of the total)
+      Track_ID  outliers  points     rate
+          1853        10      66   15.15%
+          1861         5      43   11.63%
+          1556         8      71   11.27%
+           286         5      45   11.11%
+    A high share concentrated in few tracks points at those tracks; a rate spread evenly across tracks points at the method or the acquisition.
+
+  Sensitivity table (mean |dZ| per frame vs smoothing window; window range 1..33 derived from half the median track length [68], capped at 51):
+     window   no rejection   with rejection  pairs (rej.)
+          1        6.40328          4.11651          5081
+          3        2.61625          1.77342          5081
+          5        1.72973          1.23534          5081
+          7        1.39723           1.0367          5081  <-- chosen
+          9        1.13877         0.864656          5081
+         11        1.01068         0.758634          5081
+         13       0.928688         0.722207          5081
+         15        0.85085         0.665693          5081
+         17       0.780644         0.625902          5081
+         19       0.737369         0.591052          5081
+         21       0.668258         0.528074          5081
+         23       0.609208         0.480184          5081
+         25       0.543384          0.44108          5081
+         27       0.514332         0.428371          5081
+         29         0.4936         0.416383          5081
+         31       0.459081         0.385681          5081
+         33       0.433198         0.372624          5081
+  (This table is printed regardless of which window was chosen; it is the evidence for the choice. 'no rejection' smooths the raw Z; 'with rejection' smooths after Stage 4a removal.)
+
+  Speed proxy (mean |dZ| between consecutive available points, normalised per frame):
+    raw Z                            : 6.40328 per frame (5395 intervals)
+    rejected + smoothed (W=7)        : 1.0367 per frame (5081 intervals)
+    raw Z                            : 12.8066 per second (--frame-interval 0.5 s, report only)
+    rejected + smoothed (W=7)        : 2.0734 per second
+
+  Wrote out\single_pixel_results_table_smoothed.csv
+    columns: Track_ID, Frame, X, Y, Z, Z_raw, Z_smoothed, outlier_flag, run_stamp, derivation_note
+    run_stamp = 7bb10d0dfaa2 on every row
+    derivation_note = 'WINDOW_NOT_DETERMINED;CONFINEMENT_UNBOUNDED' on every row
+    Z_smoothed defined at 5299 of 5465 rows (96.96%); undefined where Z was blank or the point was rejected.
+    The original Track_ID, Frame, X, Y and Z columns are reproduced verbatim from the input text; nothing was overwritten.
+  Wrote out\single_pixel_results_table_diagnostics.png
+
+==============================================================================
+PARAMETER BLOCK -- single_pixel_results_table.csv
+(quote this verbatim; do not re-type values out of the prose above)
+==============================================================================
+  derivation stamp                : 7bb10d0dfaa2  (zsmooth-derivation-4)
+  input                           : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\data\single_pixel_results_table.csv
+  rows / tracks / NaN Z           : 5465 / 70 / 0
+  Z range (span)                  : 782
+  median track length / span      : 68 / 74 frames
+  --z-step supplied               : 2
+  detected lattice spacing        : 2
+  z-step verification             : VERIFIED against single_pixel_results_table.csv (spacing 2)
+  Stage 2 window / threshold      : 17 frames / 5 MAD / floor 2
+  Stage 2 removed                 : 134 (2.452%) -- provisional
+  sigma (covariance)              : 4.33655
+  Cov / n pairs                   : -18.8056 / 4704
+  MSD model                       : 2*sigma^2 + Gamma*tau^alpha
+  MSD usable lags                 : 1..37
+  MSD fit range                   : 1..8  (rel residual 0.0086)
+  MSD(1)                          : 65.0276
+  2*sigma^2 (intercept)           : 39.0384
+  sigma (fitted)                  : 4.41805
+  noise share of MSD(1)           : 57.84%
+  Gamma                           : 25.0209
+  alpha (Stage-2 cleaned)         : 1.0600  [consistent with normal diffusion]  95% CI [0.6344, 1.4116]
+  alpha (no rejection)            : NOT AVAILABLE -- the anomalous model does not converge on the uncleaned MSD at any fit range
+  sqrt(Gamma) motion scale        : 5.00209
+  confinement lag                 : NOT REACHED
+  crossover lag tau*              : 1.5214 frames
+  k (--noise-margin)              : 2
+  W_smooth requirement            : 5.6264 (corrected, before odd-rounding)
+  W_smooth req uncorrected        : 6.2409 (alpha=1 special case; W would be 7)
+  W_alt (model-free, unused)      : 5 (w_req 4.9833, f=1/k^2=0.2500)
+  W_smooth 95% CI                 : [3, 23] (requirement [1.3961, 21.4971])
+  W_smooth derived / in use       : 7 / 7
+  W_hampel derived / in use       : 5 / 5
+  fit-range spread (live, in cap) : lin 1.00x / anom 1.00x
+  fit-range spread (no cap)       : lin 9.00x / anom 7.00x  -- counterfactual, removed by the cap
+  outliers                        : 166 of 5465 (3.038%)
+  per-track outlier rate          : median 2.25%, max 15.15%, 19 clean tracks, 4 above 10% (16.9% of outliers)
+  Z_smoothed defined              : 5299 of 5465 (96.96%)
+  speed raw / smoothed            : 6.40328 / 1.0367 per frame  (12.8066 / 2.0734 per second)
+  STATUS                          : OK
+  output                          : C:\Users\berke.santos\Documents\Python_Projects\ZTracker_Plugin_Smoothing\out\single_pixel_results_table_smoothed.csv
+  warnings                        : 2
+                                    - WINDOW_NOT_DETERMINED
+                                    - CONFINEMENT_UNBOUNDED
+==============================================================================
+
+==============================================================================
+SUMMARY
+==============================================================================
+  Gamma is deliberately absent: its units are Z^2 per frame^alpha, so with a different alpha
+  per method the column would not be comparable across rows. It is in each method's parameter block.
+  method                            sigma_fit  sigma_cov   alpha  W_hampel  W_smooth  outliers     rate
+  four_neighbor_mean_results_table      4.311      4.413  1.1800         5         7       109    1.99%
+  four_neighbor_median_results_tab      4.397      3.967  1.1200         5         7       132    2.42%
+  radius_mean_results_table.csv         14.99      18.78  0.5400         3        11       270    4.94%
+  single_pixel_results_table.csv        4.418      4.337  1.0600         5         7       166    3.04%
+  radius_median_results_table.csv                          FAILED -- no smoothed output written
+  (* = user override; the derived value is recorded in that method's section)
+
+==============================================================================
+CROSS-METHOD AGREEMENT
+==============================================================================
+Derived parameters compared across the methods that are NOT flagged by the consensus check.
+
+Why this matters: these methods sample the same tracks at the same frames through different
+geometry, so their noise and motion estimates are arrived at independently. Independent
+methods converging on the same derived parameters is the strongest available evidence that
+those parameters reflect the DATA rather than the derivation rules -- a rule artifact would
+have no reason to land in the same place from different inputs. Divergence is the opposite:
+it means at least one number is being set by the procedure rather than by what was measured.
+
+Flagged methods are excluded. Including a method already known to disagree with the others
+would corrupt the comparison: its divergence is expected and would drown the signal.
+
+  method                            sigma_fit  sigma_cov   alpha  W_hampel  W_smooth   (w_req)  W_alt
+  four_neighbor_mean_results_table      4.311      4.413  1.1800         5         7    5.8230      7
+  four_neighbor_median_results_tab      4.397      3.967  1.1200         5         7    5.7196      5
+  single_pixel_results_table.csv        4.418      4.337  1.0600         5         7    5.6264      5
+  (derived values, before any override. w_req is the continuous requirement before
+   odd-rounding: two methods can display the same W_smooth while their requirements differ
+   by 25% or more, so read agreement from w_req, not from the rounded integer. W_alt is the
+   model-free alternative window, reported but not used.)
+
+  sigma_fit spread (max/min) : 1.025x
+  sigma_cov spread (max/min) : 1.112x
+  W_smooth across methods    : 7..7  (identical)
+  W_hampel across methods    : 5..5  (identical)
+  w_req spread (max/min)     : 1.0349x  <- the real window agreement, free of rounding
+
+  READ THE W_smooth COLUMN WITH CARE. It is very nearly k-INVARIANT and is therefore
+  NOT good evidence that the window is well determined. The requirement is
+  W >= (2*k^2*sigma^2/Gamma)^(1/alpha), so k enters each method as k^(2/alpha). When every method
+  has the same alpha this cancels EXACTLY out of any ratio between them; when they differ it
+  cancels only approximately, leaving a weak residual dependence through the spread in alpha.
+  Before the 1/alpha correction the cancellation was exact and the spread was identical at every
+  k to four decimals. It is still far too weak to treat agreement here as evidence about k.
+  Agreement here is strong evidence about sigma and alpha, which are measured independently by
+  each method. It is structurally void as evidence about the smoothing window, because no
+  value of k could make these methods disagree. The absolute window still scales as k^2 and
+  k is still chosen by hand -- see 'HOW THIS SMOOTHING WINDOW WAS SET' in each method's
+  section. Do not read cross-method agreement as showing that k does not matter.
+
+  Excluded from this comparison:
+    radius_mean_results_table.csv            flagged as inconsistent with the consensus (Stage 1c)
+    radius_median_results_table.csv          derivation failed; no parameters to compare
+
+==============================================================================
+ALL WARNINGS RAISED
+==============================================================================
+  [WARNING: METHOD_DISAGREES_WITH_CONSENSUS] radius_mean_results_table.csv disagrees with the consensus of the other methods: 2730 of 5465 points (49.95%) differ from the median of the other methods by more than 10 (median deviation 9.972). A sampling window that straddles a height discontinuity produces confidently wrong values; this is that check.
+  [WARNING: WINDOW_NOT_DETERMINED] four_neighbor_mean_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.7199, 1.4005) maps to windows 5..19, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+  [WARNING: CONFINEMENT_UNBOUNDED] four_neighbor_mean_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+  [WARNING: WINDOW_NOT_DETERMINED] four_neighbor_median_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.7297, 1.6919) maps to windows 3..21, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+  [WARNING: CONFINEMENT_UNBOUNDED] four_neighbor_median_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+  [WARNING: ALPHA_DRIVES_WINDOW] radius_mean_results_table.csv: the 1/alpha correction changes the smoothing-window requirement by 2.82x (uncorrected 3.3791 -> corrected 9.5336; alpha = 0.5400, 1/alpha = 1.8519), above the stated 1.5x threshold. On this dataset alpha materially drives the window, so the window is only as trustworthy as the fitted exponent. Check the fit-range sensitivity table and the plateau before relying on it.
+  [WARNING: WINDOW_NOT_DETERMINED] radius_mean_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.1316, 0.9684) maps to windows 1..37, spanning more than one odd window. The point estimate 11 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+  [WARNING: ANOMALOUS_DIFFUSION] radius_mean_results_table.csv: the fitted anomalous exponent is alpha = 0.5400, which departs from 1 by more than the stated 0.2. The motion is subdiffusive, so a linear MSD model would have been misspecified here: it would have absorbed the curvature into the intercept and the slope, making the localisation noise and the motion scale both depend on where the fit range stopped. The fitted model is used instead. See the fit-range sensitivity table for what that changes.
+  [WARNING: WINDOW_NOT_DETERMINED] single_pixel_results_table.csv: the smoothing window is not determined to a single value by this data. The 95% bootstrap interval on alpha (0.6344, 1.4116) maps to windows 3..23, spanning more than one odd window. The point estimate 7 is reported and used, but it is more precise than the data warrants; anything downstream that is sensitive at that level should be checked across the interval.
+  [WARNING: CONFINEMENT_UNBOUNDED] single_pixel_results_table.csv: MSD(tau) does not flatten within lags 1..37. The confinement timescale is unbounded by this data, so NO upper cap on the smoothing window can be derived. The smoothing window below is set by the noise criterion alone.
+
+==============================================================================
+METHOD FAILURES
+==============================================================================
+  [FAILED: DERIVATION_FAILED] radius_median_results_table.csv: the fitted sigma has no stable plateau. Starting from lag 5, no run of at least 3 consecutive fit ranges holds sigma to within 10% (longest stable run found: 2 range(s), over fit ranges 1..5 through 1..6), so there is no range over which the noise floor is identifiable. No fit range is chosen and no window is derived. The tool does NOT fall back to the largest positive-intercept range, nor to any other rule.
+
+  1 of 5 methods produced no smoothed output. The remaining 4 processed normally.

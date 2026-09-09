@@ -1,0 +1,8 @@
+# zsmooth.py -- standard scientific stack only.
+# scipy is not required: the MSD fit is a first-degree numpy.polyfit and the
+# median/MAD statistics are numpy primitives.
+numpy>=1.24
+pandas>=2.0
+
+# Optional. Needed only for --plot; the tool runs unchanged without it.
+# matplotlib>=3.5

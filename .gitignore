@@ -1,0 +1,29 @@
+# ---- Data: inputs and outputs are not tracked ----
+# Record input identity (filename + SHA-256) in run output instead.
+data/
+input/
+inputs/
+output/
+outputs/
+results/
+*.csv
+!tests/fixtures/*.csv
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Logs and scratch ----
+*.log
+scratch/
+tmp/
