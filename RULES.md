@@ -288,6 +288,33 @@ covers:
 Record: prompt_outputs/002-zsmooth-governance-phaseB.md
 ```
 
+### The Co-Authored-By trailer
+
+After the `Record:` line or lines, append a blank line and then:
+
+```
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+```
+
+This is the standing convention for commits authored through Claude Code, and it
+applies to every commit made in this repository through it. Include it in the
+proposed message rather than adding it at commit time, so that what is approved
+is what gets written.
+
+**It goes after the `Record:` lines, not before.** The `Record:` lines are the
+project's own decision record and belong next to the body that explains them;
+the trailer is authorship metadata and belongs with the other git trailers.
+
+This does not contradict the rule above that the body ends with the `Record:`
+lines. That rule describes where the **body** ends. The trailer sits after the
+body, in the trailer block, alongside any other standard git trailer such as
+`Signed-off-by:`. If a future convention adds further trailers, they join that
+block and the body still ends at the `Record:` lines.
+
+Recorded after commit `47dfcf2`, where the trailer was appended to an
+already-approved message and flagged in the report rather than left to be
+found. Adding this subsection changed nothing above it.
+
 Once the message is approved, **commit AND push**, and report both in one turn:
 the commit hash, the push output, and `git status`.
 
