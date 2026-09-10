@@ -1,11 +1,20 @@
 # ---- Data: inputs and outputs are not tracked ----
-# Record input identity (filename + SHA-256) in run output instead.
+# Run output records input identity as FILENAME AND ABSOLUTE PATH only -- in the
+# report's "Inputs:" block and in each method's parameter block "input" field.
+# NOT IMPLEMENTED: a content hash (SHA-256) of each input. Intended, not present.
+# Until it exists, nothing in the output can tell you which data produced it --
+# the derivation stamp hashes the arguments, never the inputs. See CLAUDE.md,
+# "The derivation stamp's blind spots".
 data/
 input/
 inputs/
 output/
 outputs/
 results/
+# The tool's default output directory. Regenerable build output: the tool
+# rewrites it on every run. Previously half-tracked -- the PNGs and the report
+# were committed while *_smoothed.csv were blocked by the *.csv rule below.
+out/
 *.csv
 !tests/fixtures/*.csv
 

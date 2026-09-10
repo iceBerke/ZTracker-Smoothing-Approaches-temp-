@@ -908,6 +908,27 @@ others would corrupt the comparison, because its divergence is expected and woul
 drown the signal. Methods whose derivation failed are excluded too, having no
 parameters to compare. Both exclusions are listed with their reasons.
 
+> **STALE NUMBERS BELOW — derivation-3, not reproduced by the current
+> derivation.** Everything from here to the end of this section that quotes a
+> smoothing window, a `w_req` value or a cross-method spread predates the
+> `1/alpha` correction and was **not** updated when derivation-4 landed.
+> Specifically: the smoothing windows given as `9, 9 and 7` in the next
+> sentence (this README's own "Derivation stamp" section records that the
+> correction moved the sound methods to `7, 7, 7`); the `1.2812×` spread; and
+> the three `w_req` values `4.4977, 3.9662 and 3.5105` rounding to
+> `W_smooth = 5`, where the current derivation gives `5.8230, 5.7196 and
+> 5.6264` rounding to `7`.
+>
+> The `sigma_fit within 1.025×` and `identical Hampel windows` claims in the
+> next sentence were checked and are current. The surrounding *argument* — that
+> `k` cancels out of any ratio between methods, and that rounding hides real
+> disagreement — is unaffected and still holds; only the illustrative figures
+> are stale.
+>
+> **Read current values from `out/zsmooth_parameters_report.txt`, never from
+> here.** Stale and current figures per
+> `prompt_outputs/001-zsmooth-recon-audit.md`; annotated by task 002.
+
 On the current dataset the three eligible methods give `sigma_fit` within 1.025×
 of each other and identical Hampel windows, with smoothing windows of 9, 9 and 7.
 
